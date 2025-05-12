@@ -1,2 +1,3 @@
-# TECHO-IdeATLAS
-Test project for the TECHO-IdeATLAS project,
+# About
+
+On this project I will test the implementation of some
