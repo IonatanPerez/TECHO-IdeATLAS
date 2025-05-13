@@ -174,7 +174,7 @@ def found_overlapping_cells(row, grid_polygons):
     # Check if the polygon is completely inside the cell
     if polygon.intersects(cell_polygon):
         if abs(polygon.intersection(cell_polygon).area - polygon.area) < 0.0001 * polygon.area: # We can use a tolerance to check if the polygon is completely inside the cell
-            overlapping.append({"cell_long_pos": cell_x, "cell_lat_pos": cell_y, "area": polygon.area, "polygon_tag": row["full_plus_code"], "fraction_over_building": 1})
+            overlapping.append({"cell_long_pos": cell_x, "cell_lat_pos": cell_y, "area": polygon.area, "polygon_tag": row["full_plus_code"], "fraction_of_the_building": 1})
             return overlapping
     # Check the surrounding cells
     for i in range(-cells_size, cells_size + 1):
@@ -202,8 +202,8 @@ def build_intersections_df(data):
 
 def build_cell_composition(intersections):
     # We will create a dataframe with the cell composition
-    cell_composition = intersections.groupby(["cell_long_pos", "cell_lat_pos"])[["polygon_tag", "fraction_over_buildings_in_cell", "fraction_of_the_building"]].apply(
-        lambda x: [{"polygon_tag": row["polygon_tag"], "fraction_over_buildings_in_cell": row["fraction_over_buildings_in_cell"], "fraction_of_the_building": row["fraction_of_the_building"]} for _, row in x.iterrows()]
+    cell_composition = intersections.groupby(["cell_long_pos", "cell_lat_pos"])[["polygon_tag", "fraction_over_buildings_in_cell", "fraction_of_the_building", "area"]].apply(
+        lambda x: [{"polygon_tag": row["polygon_tag"], "fraction_over_buildings_in_cell": row["fraction_over_buildings_in_cell"], "fraction_of_the_building": row["fraction_of_the_building"], "area": row["area"]} for _, row in x.iterrows()]
     )
     cell_composition = cell_composition.to_frame()
     cell_composition.columns = ["cell_composition"]
@@ -267,7 +267,7 @@ def get_orientation_for_many_polygons(polygons, weights = None, include_eccentri
         if (coords[0] == coords[-1]).all():
             coords = coords[:-1]
         coords -= coords.mean(axis=0)
-        coords = coords * weights[i]
+        coords = coords * np.sqrt(weights[i]) # We scale the coordinates by the square root of the weight to ensure that the weight is proportional to the area
         all_coords.append(coords)
     all_coords = np.concatenate(all_coords)
     cov = np.cov(all_coords.T)
