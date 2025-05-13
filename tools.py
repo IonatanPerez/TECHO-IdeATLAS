@@ -207,15 +207,28 @@ def plot_occupied_area_heatmap(intersections):
     sns.heatmap(occupied_area_heatmap, cmap="coolwarm", cbar_kws={'label': 'Area Occupied'})
 
 def get_polygon_orientation(polygon, include_eccentricity=True):
-    coords = np.array(polygon.exterior.coords)
+    coords = np.array(polygon.exterior.coords[:])
+    if (coords[0] == coords[-1]).all():
+        coords = coords[:-1] # Exclude the last point to avoid duplication because closing polygon point that bias the results
     coords -= coords.mean(axis=0)
     cov = np.cov(coords.T)
     eigvals, eigvecs = np.linalg.eigh(cov)
     principal_axis = eigvecs[:, np.argmax(eigvals)]
     angle_rad = atan2(principal_axis[1], principal_axis[0])
     angle_deg = degrees(angle_rad)
+    eigvals = np.sort(eigvals)[::-1]
     if include_eccentricity:
         eccentricity = np.sqrt(1 - (eigvals[1] / eigvals[0]))
         return angle_deg % 180, eccentricity
     else:
         return angle_deg % 180
+
+
+def get_orientation_vector(polygon):
+    coords = np.array(polygon.exterior.coords)
+    coords -= coords.mean(axis=0)
+    cov = np.cov(coords.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    i = np.argmax(eigvals)
+    direction = eigvecs[:, i]
+    return coords.mean(axis=0), direction, eigvals[i]
