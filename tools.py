@@ -7,10 +7,10 @@ import seaborn as sns
 import numpy as np
 import matplotlib.pyplot as plt
 from math import atan2, degrees
+from matplotlib.collections import LineCollection
 
 
 from settings import CONSTANTS
-import settings
 
 def create_subset(log_center, lat_center, size_meters, label, size_entries_limit = 1e5):
     """
@@ -106,7 +106,7 @@ def get_area_center(data):
 
 def calculate_polygon_size(polygon, cell_size_in_degrees=None):
     if cell_size_in_degrees is None:
-        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
+        cell_size_in_degrees = CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES
     min_x, min_y, max_x, max_y = polygon.bounds
     width = (max_x - min_x) / cell_size_in_degrees
     height = (max_y - min_y) / cell_size_in_degrees
@@ -115,7 +115,7 @@ def calculate_polygon_size(polygon, cell_size_in_degrees=None):
 
 def add_derivate_columns(data, cell_size_in_degrees=None):
     if cell_size_in_degrees is None:
-        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
+        cell_size_in_degrees = CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES
 
     # We will create a naive long and lat coordinates relative to the center of the area that we want to analyze, this allows us to make easy the math to locate the corresponding cell with just a simple division.
     long_area_center, lat_area_center = get_area_center(data)
@@ -142,7 +142,7 @@ def create_polygon(x, y, cell_size_in_degrees, reference_x = 0, reference_y = 0)
 
 def create_grid(data, cell_size_in_degrees=None):
     if cell_size_in_degrees is None:
-        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
+        cell_size_in_degrees = CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES
     
     x_min = data["cell_long_pos"].min()
     x_max = data["cell_long_pos"].max()
@@ -216,7 +216,7 @@ def build_cell_composition(intersections):
     return cell_composition
 
 def plot_occupied_area_heatmap(intersections, lat_area_center = 0, long_area_center = 0, save_as = None):
-    cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
+    cell_size_in_degrees = CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES
     occupied_area = intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].sum().reset_index()
     occupied_area["relative_to_cell_area"] = occupied_area["area"] / (cell_size_in_degrees) ** 2
     occupied_area_heatmap = occupied_area.pivot_table(index="cell_lat_pos", columns="cell_long_pos", values="relative_to_cell_area", aggfunc="sum", fill_value=0)
@@ -312,3 +312,49 @@ def add_orientation_to_cells(composition, buildings_df):
     composition["eccentricity"] = composition["orientation"].apply(lambda x: x[1])
     composition.drop(columns=["orientation"], inplace=True)
     return composition
+
+def plot_orientation_lines(cell_composition, lat_area_center=0, long_area_center=0, save_as=None):
+    """
+    Dibuja una línea centrada en cada celda, con orientación determinada por el ángulo
+    y longitud proporcional a la excentricidad. Robusto a la escala.
+    """
+    cell_size_in_degrees = CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES
+    df = cell_composition.reset_index().copy()
+
+    # Calcular centro de cada celda
+    df["center_lat"] = df["cell_lat_pos"] * cell_size_in_degrees + lat_area_center + cell_size_in_degrees / 2
+    df["center_lon"] = df["cell_long_pos"] * cell_size_in_degrees + long_area_center + cell_size_in_degrees / 2
+
+    # Convertir ángulo a radianes
+    df["angle_rad"] = np.deg2rad(df["orientation_angle"])
+
+    # Escalar longitud de línea (máximo: 70% del ancho de celda)
+    max_length = 0.7 * cell_size_in_degrees
+    df["length"] = df["eccentricity"] * max_length
+
+    # Calcular segmentos: cada línea va del punto A a B, centrado en el centro de celda
+    segments = []
+    for _, row in df.iterrows():
+        dx = np.cos(row["angle_rad"]) * row["length"] / 2
+        dy = np.sin(row["angle_rad"]) * row["length"] / 2
+        x0, y0 = row["center_lon"], row["center_lat"]
+        segment = [(x0 - dx, y0 - dy), (x0 + dx, y0 + dy)]
+        segments.append(segment)
+
+    # Crear el gráfico
+    fig, ax = plt.subplots(figsize=(12, 10))
+    line_collection = LineCollection(segments, colors="black", linewidths=1.2, alpha=0.8)
+    ax.add_collection(line_collection)
+
+    ax.set_xlim(df["center_lon"].min() - cell_size_in_degrees, df["center_lon"].max() + cell_size_in_degrees)
+    ax.set_ylim(df["center_lat"].min() - cell_size_in_degrees, df["center_lat"].max() + cell_size_in_degrees)
+
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title("Cell Orientation (line direction) and Eccentricity (line length)")
+    ax.grid(True, linestyle='--', alpha=0.3)
+
+    if save_as:
+        plt.tight_layout()
+        plt.savefig(save_as)
+    plt.show()
