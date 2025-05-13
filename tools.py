@@ -10,6 +10,7 @@ from math import atan2, degrees
 
 
 from settings import CONSTANTS
+import settings
 
 def create_subset(log_center, lat_center, size_meters, label, size_entries_limit = 1e5):
     """
@@ -103,15 +104,18 @@ def get_area_center(data):
     return (data["longitude"].max() + data["longitude"].min()) / 2, (data["latitude"].max() + data["latitude"].min()) / 2
 
 
-def calculate_polygon_size(polygon, cell_size_in_degrees=CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES):
-    # Calculate the size of the polygon in terms of the cell size
+def calculate_polygon_size(polygon, cell_size_in_degrees=None):
+    if cell_size_in_degrees is None:
+        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
     min_x, min_y, max_x, max_y = polygon.bounds
     width = (max_x - min_x) / cell_size_in_degrees
     height = (max_y - min_y) / cell_size_in_degrees
     return max(width,height)/2
 
 
-def add_derivate_columns(data, cell_size_in_degrees=CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES):
+def add_derivate_columns(data, cell_size_in_degrees=None):
+    if cell_size_in_degrees is None:
+        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
 
     # We will create a naive long and lat coordinates relative to the center of the area that we want to analyze, this allows us to make easy the math to locate the corresponding cell with just a simple division.
     long_area_center, lat_area_center = get_area_center(data)
@@ -125,7 +129,7 @@ def add_derivate_columns(data, cell_size_in_degrees=CONSTANTS.DEFAULT_CELL_SIZE_
     data["cell_lat_pos"] = data["relative_lat"].floordiv(cell_size_in_degrees).astype(int)
 
     # We still need to know how much close cells could overlap with the building, so we will define the building size in terms of the cell size.
-    data["size_in_cells"] = data["geometry"].apply(calculate_polygon_size).astype(int) + 1 # We make +1 because we need to include at least one cell on each side in case that the building is close to the cell border. For example, in the case that the size (that is the max radius) is 0.79 cells, that means that we need to check all contiguous cells. In the case that the radius is 1.2 we need to check at least 2 cells on each side (and corners) because if the building center is very close to the cell border it could cross an entire cell on the side and reach the next one. 
+    data["size_in_cells"] = data["geometry"].apply(lambda poly: calculate_polygon_size(poly, cell_size_in_degrees)).astype(int) + 1 # We make +1 because we need to include at least one cell on each side in case that the building is close to the cell border. For example, in the case that the size (that is the max radius) is 0.79 cells, that means that we need to check all contiguous cells. In the case that the radius is 1.2 we need to check at least 2 cells on each side (and corners) because if the building center is very close to the cell border it could cross an entire cell on the side and reach the next one. 
 
     return data
 
@@ -136,7 +140,9 @@ def create_polygon(x, y, cell_size_in_degrees, reference_x = 0, reference_y = 0)
     poly = Polygon(coords)
     return poly
 
-def create_grid(data, cell_size_in_degrees=CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES):
+def create_grid(data, cell_size_in_degrees=None):
+    if cell_size_in_degrees is None:
+        cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
     
     x_min = data["cell_long_pos"].min()
     x_max = data["cell_long_pos"].max()
@@ -210,13 +216,13 @@ def build_cell_composition(intersections):
     return cell_composition
 
 def plot_occupied_area_heatmap(intersections, lat_area_center = 0, long_area_center = 0, save_as = None):
-    
+    cell_size_in_degrees = settings.CONSTANTS.DEFAULT_CELL_SIZE_METERS * settings.CONSTANTS.METERS_TO_DEGREES
     occupied_area = intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].sum().reset_index()
-    occupied_area["relative_to_cell_area"] = occupied_area["area"] / (CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES) ** 2
+    occupied_area["relative_to_cell_area"] = occupied_area["area"] / (cell_size_in_degrees) ** 2
     occupied_area_heatmap = occupied_area.pivot_table(index="cell_lat_pos", columns="cell_long_pos", values="relative_to_cell_area", aggfunc="sum", fill_value=0)
     # We want to recover the original cell coordinates
-    index = occupied_area_heatmap.index * CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES + lat_area_center
-    columns = occupied_area_heatmap.columns * CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES + long_area_center
+    index = occupied_area_heatmap.index * cell_size_in_degrees + lat_area_center
+    columns = occupied_area_heatmap.columns * cell_size_in_degrees + long_area_center
     occupied_area_heatmap.index = index
     occupied_area_heatmap.columns = columns
     occupied_area_heatmap.sort_index(ascending=False, inplace=True)
@@ -282,12 +288,27 @@ def get_orientation_for_many_polygons(polygons, weights = None, include_eccentri
     else:
         return angle_deg % 180
 
+def calculate_orientation_for_cell(cell_composition_row, buildings_df):
+    # Get the cell composition
+    cell_composition = cell_composition_row["cell_composition"]
+    # Get the buildings in the cell
+    buildings = []
+    for building in cell_composition:
+        building_id = building["polygon_tag"]
+        building_fraction = building["fraction_of_the_building"]
+        # Get the building from the dataframe
+        building_df = buildings_df[buildings_df["full_plus_code"] == building_id]
+        building_polygon = building_df.iloc[0]["geometry"]
+        buildings.append({"polygon": building_polygon, "weight": building_fraction})
+    # Calculate the orientation for each polygon
+    orientations = get_orientation_for_many_polygons([building["polygon"] for building in buildings], [building["weight"] for building in buildings])
+    return orientations
 
-def get_orientation_vector(polygon):
-    coords = np.array(polygon.exterior.coords)
-    coords -= coords.mean(axis=0)
-    cov = np.cov(coords.T)
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    i = np.argmax(eigvals)
-    direction = eigvecs[:, i]
-    return coords.mean(axis=0), direction, eigvals[i]
+def add_orientation_to_cells(composition, buildings_df):
+    # Calculate the orientation for each cell
+    composition["orientation"] = composition.progress_apply(lambda row: calculate_orientation_for_cell(row, buildings_df), axis=1)
+    # Split the orientation into two columns
+    composition["orientation_angle"] = composition["orientation"].apply(lambda x: x[0])
+    composition["eccentricity"] = composition["orientation"].apply(lambda x: x[1])
+    composition.drop(columns=["orientation"], inplace=True)
+    return composition
