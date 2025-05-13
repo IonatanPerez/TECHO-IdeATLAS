@@ -1,0 +1,11 @@
+class CONSTANTS:
+    
+    DEGREES_TO_METERS = 111320
+    METERS_TO_DEGREES = 1 / DEGREES_TO_METERS
+
+    COMPLETE_DATA_FILE = "95b_buildings.csv"
+    DATA_FOLDER = "Data/"
+    SUBSETS_FOLDER = "Subsets/"
+
+    DEFAULT_CELL_SIZE_METERS = 10
+    
