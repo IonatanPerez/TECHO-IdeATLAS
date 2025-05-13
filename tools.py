@@ -5,6 +5,7 @@ from shapely.geometry import Polygon
 from tqdm import tqdm
 import seaborn as sns
 import numpy as np
+import matplotlib.pyplot as plt
 from math import atan2, degrees
 
 
@@ -173,7 +174,7 @@ def found_overlapping_cells(row, grid_polygons):
     # Check if the polygon is completely inside the cell
     if polygon.intersects(cell_polygon):
         if abs(polygon.intersection(cell_polygon).area - polygon.area) < 0.0001 * polygon.area: # We can use a tolerance to check if the polygon is completely inside the cell
-            overlapping.append({"cell_long_pos": cell_x, "cell_lat_pos": cell_y, "area": polygon.area, "polygon_tag": row["full_plus_code"]})
+            overlapping.append({"cell_long_pos": cell_x, "cell_lat_pos": cell_y, "area": polygon.area, "polygon_tag": row["full_plus_code"], "fraction_over_building": 1})
             return overlapping
     # Check the surrounding cells
     for i in range(-cells_size, cells_size + 1):
@@ -185,7 +186,7 @@ def found_overlapping_cells(row, grid_polygons):
                 cell_polygon = grid_polygons[target_cell_x][target_cell_y]
                 if polygon.intersects(cell_polygon):
                     overlapping_area = polygon.intersection(cell_polygon)
-                    overlapping.append({"cell_long_pos": target_cell_x, "cell_lat_pos": target_cell_y, "area": overlapping_area.area, "polygon_tag": row["full_plus_code"]})
+                    overlapping.append({"cell_long_pos": target_cell_x, "cell_lat_pos": target_cell_y, "area": overlapping_area.area, "polygon_tag": row["full_plus_code"], "fraction_of_the_building": overlapping_area.area / polygon.area})
                     if overlapping_area == polygon.area:
                         # If the polygon is completely inside the cell, we can skip it
                         return overlapping
@@ -195,28 +196,51 @@ def build_intersections_df(data):
 
     intersections = data["overlapping"].explode().reset_index(drop=True)
     intersections = pd.DataFrame(intersections.tolist())
-    intersections["relative_weight"] = intersections["area"] / intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].transform("sum")
+    intersections["fraction_over_buildings_in_cell"] = intersections["area"] / intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].transform("sum")
     
     return intersections
 
 def build_cell_composition(intersections):
     # We will create a dataframe with the cell composition
-    cell_composition = intersections.groupby(["cell_long_pos", "cell_lat_pos"])[["polygon_tag", "relative_weight"]].apply(
-        lambda x: [{"polygon_tag": row["polygon_tag"], "relative_weight": row["relative_weight"]} for _, row in x.iterrows()]
+    cell_composition = intersections.groupby(["cell_long_pos", "cell_lat_pos"])[["polygon_tag", "fraction_over_buildings_in_cell", "fraction_of_the_building"]].apply(
+        lambda x: [{"polygon_tag": row["polygon_tag"], "fraction_over_buildings_in_cell": row["fraction_over_buildings_in_cell"], "fraction_of_the_building": row["fraction_of_the_building"]} for _, row in x.iterrows()]
     )
     cell_composition = cell_composition.to_frame()
     cell_composition.columns = ["cell_composition"]
     return cell_composition
 
-def plot_occupied_area_heatmap(intersections):
+def plot_occupied_area_heatmap(intersections, lat_area_center = 0, long_area_center = 0, save_as = None):
     
     occupied_area = intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].sum().reset_index()
-    occupied_area_heatmap = occupied_area.pivot_table(index="cell_lat_pos", columns="cell_long_pos", values="area", aggfunc="sum", fill_value=0)
+    occupied_area["relative_to_cell_area"] = occupied_area["area"] / (CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES) ** 2
+    occupied_area_heatmap = occupied_area.pivot_table(index="cell_lat_pos", columns="cell_long_pos", values="relative_to_cell_area", aggfunc="sum", fill_value=0)
+    # We want to recover the original cell coordinates
+    index = occupied_area_heatmap.index * CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES + lat_area_center
+    columns = occupied_area_heatmap.columns * CONSTANTS.DEFAULT_CELL_SIZE_METERS * CONSTANTS.METERS_TO_DEGREES + long_area_center
+    occupied_area_heatmap.index = index
+    occupied_area_heatmap.columns = columns
     occupied_area_heatmap.sort_index(ascending=False, inplace=True)
-    sns.heatmap(occupied_area_heatmap, cmap="coolwarm", cbar_kws={'label': 'Area Occupied'})
+    sns.heatmap(occupied_area_heatmap, cmap="coolwarm", cbar_kws={'label': 'Fraction of area occupied'})
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+    plt.title("Occupied area heatmap")
+    # Show only a few rounded ticks on axes, set them horizontal
+    plt.xticks(
+        ticks=np.round(np.linspace(plt.gca().get_xticks()[0], plt.gca().get_xticks()[-1], 6), 5),
+        rotation=0
+    )
+    plt.yticks(
+        ticks=np.round(np.linspace(plt.gca().get_yticks()[0], plt.gca().get_yticks()[-1], 6), 5),
+        rotation=0
+    )
+    if save_as is not None:
+        plt.tight_layout()
+        plt.savefig(save_as)
+    plt.show()
 
 def get_polygon_orientation(polygon, include_eccentricity=True):
-    coords = np.array(polygon.exterior.coords[:])
+    mrr = polygon.minimum_rotated_rectangle # With this we ensure the independence of the number of points density of the polygon
+    coords = np.array(mrr.exterior.coords[:])
     if (coords[0] == coords[-1]).all():
         coords = coords[:-1] # Exclude the last point to avoid duplication because closing polygon point that bias the results
     coords -= coords.mean(axis=0)
@@ -232,10 +256,14 @@ def get_polygon_orientation(polygon, include_eccentricity=True):
     else:
         return angle_deg % 180
     
-def get_orientation_for_many_polygons(polygons, weights, include_eccentricity=True):
+def get_orientation_for_many_polygons(polygons, weights = None, include_eccentricity=True):
+    if weights is None:
+        weights = np.ones(len(polygons))
+    assert len(polygons) == len(weights), "The number of polygons and weights must be the same"
     all_coords = []
     for i, polygon in enumerate(polygons):
-        coords = np.array(polygon.exterior.coords[:])
+        mrr = polygon.minimum_rotated_rectangle # With this we ensure that all polygons had the same weight
+        coords = np.array(mrr.exterior.coords[:])
         if (coords[0] == coords[-1]).all():
             coords = coords[:-1]
         coords -= coords.mean(axis=0)
