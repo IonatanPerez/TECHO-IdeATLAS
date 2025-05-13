@@ -4,6 +4,8 @@ from shapely import wkt
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import seaborn as sns
+import numpy as np
+from math import atan2, degrees
 
 
 from settings import CONSTANTS
@@ -203,3 +205,17 @@ def plot_occupied_area_heatmap(intersections):
     occupied_area_heatmap = occupied_area.pivot_table(index="cell_lat_pos", columns="cell_long_pos", values="area", aggfunc="sum", fill_value=0)
     occupied_area_heatmap.sort_index(ascending=False, inplace=True)
     sns.heatmap(occupied_area_heatmap, cmap="coolwarm", cbar_kws={'label': 'Area Occupied'})
+
+def get_polygon_orientation(polygon, include_eccentricity=True):
+    coords = np.array(polygon.exterior.coords)
+    coords -= coords.mean(axis=0)
+    cov = np.cov(coords.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    principal_axis = eigvecs[:, np.argmax(eigvals)]
+    angle_rad = atan2(principal_axis[1], principal_axis[0])
+    angle_deg = degrees(angle_rad)
+    if include_eccentricity:
+        eccentricity = np.sqrt(1 - (eigvals[1] / eigvals[0]))
+        return angle_deg % 180, eccentricity
+    else:
+        return angle_deg % 180
