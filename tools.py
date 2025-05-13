@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import atan2, degrees
 from matplotlib.collections import LineCollection
-
+import os
 
 from settings import CONSTANTS
 
@@ -17,6 +17,8 @@ def create_subset(log_center, lat_center, size_meters, label, size_entries_limit
     This method creates a subset of entries centered around a given point.
     """
 
+    # We check that the file exists
+    assert os.path.isfile(CONSTANTS.DATA_FOLDER + CONSTANTS.COMPLETE_DATA_FILE), f"File {CONSTANTS.DATA_FOLDER + CONSTANTS.COMPLETE_DATA_FILE} does not exist. This file must be extracted from the original raw data available on https://storage.googleapis.com/open-buildings-data/v3/polygons_s2_level_4_gzip/95b_buildings.csv.gz and put into your local data folder that is not sync with git."
     data = pd.read_csv(CONSTANTS.DATA_FOLDER + CONSTANTS.COMPLETE_DATA_FILE)
 
     lat_max = data["latitude"].max()
