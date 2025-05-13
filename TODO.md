@@ -1,6 +1,6 @@
 # Pendings
 
-- Finish orientation algorithm
+[x] Finish orientation algorithm
 [x] Check why change default size for cell is not working
 - Make requirements file
 - Check how to represent the orientation of the points
