@@ -199,6 +199,13 @@ def build_intersections_df(data):
     
     return intersections
 
+def build_cell_composition(intersections):
+    # We will create a dataframe with the cell composition
+    cell_composition = intersections.groupby(["cell_long_pos", "cell_lat_pos"])[["polygon_tag", "relative_weight"]].apply(
+        lambda x: [{"polygon_tag": row["polygon_tag"], "relative_weight": row["relative_weight"]} for _, row in x.iterrows()]
+    )
+    return cell_composition
+
 def plot_occupied_area_heatmap(intersections):
     
     occupied_area = intersections.groupby(["cell_long_pos", "cell_lat_pos"])["area"].sum().reset_index()
