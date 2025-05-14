@@ -563,3 +563,202 @@ def plot_orientation_lines(cell_composition, area_center_x=0, area_center_y=0, s
         plt.tight_layout()
         plt.savefig(save_as)
     plt.show()
+
+def build_cell_density_geodataframe(cell_composition, area_center_x, area_center_y, reproject_to_latlon=False, utm_crs=None):
+    """
+    Build a GeoDataFrame of grid cells with density of coverage (fraction of cell covered by buildings).
+    Optionally reproject to EPSG:4326 (longitude/latitude) for export.
+
+    Args:
+        cell_composition (pd.DataFrame): DataFrame with cell composition (output of build_cell_composition).
+        area_center_x (float): X coordinate of region center (meters, UTM).
+        area_center_y (float): Y coordinate of region center (meters, UTM).
+        reproject_to_latlon (bool): If True, reproject output to EPSG:4326 (longitude/latitude).
+        utm_crs (str or int, optional): UTM CRS code (e.g., 'EPSG:32721'). If None, inferred from cell_composition index.
+
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame with columns:
+            - geometry: Polygon of the cell (in UTM or EPSG:4326)
+            - x_cell, y_cell: Cell indices
+            - density: Fraction of cell covered by buildings
+    """
+
+    # Prepare lists for GeoDataFrame
+    polygons = []
+    densities = []
+    x_cells = []
+    y_cells = []
+
+    for (x_cell, y_cell), row in cell_composition.iterrows():
+        # Build cell polygon in UTM
+        coords = [
+            (x_cell, y_cell),
+            (x_cell + 1, y_cell),
+            (x_cell + 1, y_cell + 1),
+            (x_cell, y_cell + 1)
+        ]
+        coords = [
+            (coord[0] * CONSTANTS.CELL_SIZE_METERS + area_center_x,
+             coord[1] * CONSTANTS.CELL_SIZE_METERS + area_center_y)
+            for coord in coords
+        ]
+        poly = Polygon(coords)
+        polygons.append(poly)
+        x_cells.append(x_cell)
+        y_cells.append(y_cell)
+        # Compute density (sum of building area fractions in cell)
+        cell_buildings = row["cell_composition"]
+        total_covered_area = sum(b["area"] for b in cell_buildings)
+        cell_area = CONSTANTS.CELL_SIZE_METERS ** 2
+        density = total_covered_area / cell_area
+        densities.append(density)
+
+    # Convert x_cell and y_cell to actual metric coordinates (cell center)
+    center_xs = [x * CONSTANTS.CELL_SIZE_METERS + area_center_x + CONSTANTS.CELL_SIZE_METERS / 2 for x in x_cells]
+    center_ys = [y * CONSTANTS.CELL_SIZE_METERS + area_center_y + CONSTANTS.CELL_SIZE_METERS / 2 for y in y_cells]
+
+    # Create the GeoDataFrame in UTM coordinates
+    gdf = gpd.GeoDataFrame({
+        "x_cell": x_cells,
+        "y_cell": y_cells,
+        "center_x": center_xs,
+        "center_y": center_ys,
+        "density": densities,
+        "geometry": polygons
+    })
+
+    # If requested, convert center_x and center_y to longitude/latitude
+    if reproject_to_latlon:
+        # Set CRS to UTM first (needed for transformation)
+        if utm_crs is not None:
+            gdf.set_crs(utm_crs, inplace=True)
+        else:
+            gdf.set_crs(epsg=32721, inplace=True)
+        # Convert center points to Point geometry for transformation
+        center_points = gpd.GeoSeries([Point(x, y) for x, y in zip(gdf["center_x"], gdf["center_y"])], crs=gdf.crs)
+        center_points_latlon = center_points.to_crs(epsg=4326)
+        gdf["center_lon"] = center_points_latlon.x
+        gdf["center_lat"] = center_points_latlon.y
+        gdf.drop(columns=["center_x", "center_y"], inplace=True)
+        gdf.drop(columns=["x_cell", "y_cell"], inplace=True)
+    # Set CRS to UTM
+    if utm_crs is not None:
+        gdf.set_crs(utm_crs, inplace=True)
+    else:
+        # Try to infer from first polygon (if available)
+        gdf.set_crs(epsg=32721, inplace=True)  # Default to 32721 (Uruguay/Buenos Aires); user should override if needed
+
+    if reproject_to_latlon:
+        gdf = gdf.to_crs(epsg=4326)
+    return gdf
+
+def build_building_orientation_geodataframe(buildings_gdf, reproject_to_latlon=False, utm_crs=None):
+    """
+    Build a GeoDataFrame of buildings with orientation, eccentricity, and longitude/latitude coordinates.
+
+    Args:
+        buildings_gdf (gpd.GeoDataFrame): GeoDataFrame of buildings in UTM coordinates, with columns:
+            - geometry: Polygon geometry (UTM)
+            - full_plus_code: Unique building ID
+            - orientation_angle: Orientation angle (degrees)
+            - eccentricity: Eccentricity (0-1)
+        reproject_to_latlon (bool): If True, reproject output to EPSG:4326 (longitude/latitude).
+        utm_crs (str or int, optional): UTM CRS code (e.g., 'EPSG:32721'). If None, inferred from input.
+
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame with columns:
+            - geometry: Polygon (UTM or EPSG:4326)
+            - full_plus_code: Building ID
+            - orientation_angle: Orientation (degrees)
+            - eccentricity: Eccentricity (0-1)
+            - longitude: Longitude of centroid
+            - latitude: Latitude of centroid
+    """
+    # Select relevant columns
+    columns = ["geometry", "full_plus_code", "orientation_angle", "eccentricity"]
+    gdf = buildings_gdf[columns].copy()
+    # Set CRS to UTM
+    if utm_crs is not None:
+        gdf.set_crs(utm_crs, inplace=True)
+    elif gdf.crs is None:
+        gdf.set_crs(epsg=32721, inplace=True)  # Default to 32721 (Uruguay/Buenos Aires)
+    # Compute centroid coordinates in UTM
+    centroids = gdf.geometry.centroid
+    # Convert centroids to lat/lon
+    centroids_latlon = gpd.GeoSeries(centroids, crs=gdf.crs).to_crs(epsg=4326)
+    gdf["longitude"] = centroids_latlon.x
+    gdf["latitude"] = centroids_latlon.y
+    # Optionally reproject polygons
+    if reproject_to_latlon:
+        gdf = gdf.to_crs(epsg=4326)
+    return gdf
+
+def build_cell_orientation_geodataframe(cell_composition, area_center_x, area_center_y, reproject_to_latlon=False, utm_crs=None):
+        """
+        Build a GeoDataFrame of grid cells with orientation and eccentricity.
+        Optionally reproject to EPSG:4326 (longitude/latitude) for export.
+
+        Args:
+            cell_composition (pd.DataFrame): DataFrame with cell orientation (output of add_orientation_to_cells).
+            area_center_x (float): X coordinate of region center (meters, UTM).
+            area_center_y (float): Y coordinate of region center (meters, UTM).
+            reproject_to_latlon (bool): If True, reproject output to EPSG:4326 (longitude/latitude).
+            utm_crs (str or int, optional): UTM CRS code (e.g., 'EPSG:32721'). If None, inferred from cell_composition index.
+
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame with columns:
+                - geometry: Polygon of the cell (in UTM or EPSG:4326)
+                - x_cell, y_cell: Cell indices
+                - orientation_angle: Dominant orientation angle (degrees)
+                - eccentricity: Dominant eccentricity (0-1)
+        """
+        polygons = []
+        x_cells = []
+        y_cells = []
+        orientation_angles = []
+        eccentricities = []
+
+        for (x_cell, y_cell), row in cell_composition.iterrows():
+            coords = [
+                (x_cell, y_cell),
+                (x_cell + 1, y_cell),
+                (x_cell + 1, y_cell + 1),
+                (x_cell, y_cell + 1)
+            ]
+            coords = [
+                (coord[0] * CONSTANTS.CELL_SIZE_METERS + area_center_x,
+                 coord[1] * CONSTANTS.CELL_SIZE_METERS + area_center_y)
+                for coord in coords
+            ]
+            poly = Polygon(coords)
+            polygons.append(poly)
+            x_cells.append(x_cell)
+            y_cells.append(y_cell)
+            orientation_angles.append(row["orientation_angle"])
+            eccentricities.append(row["eccentricity"])
+
+        # Compute centroid coordinates in UTM for each cell polygon
+        centroids = [poly.centroid for poly in polygons]
+        # Convert centroids to longitude/latitude
+        centroids_gs = gpd.GeoSeries(centroids, crs=utm_crs if utm_crs is not None else "EPSG:32721")
+        centroids_latlon = centroids_gs.to_crs(epsg=4326)
+        longitudes = centroids_latlon.x
+        latitudes = centroids_latlon.y
+
+        gdf = gpd.GeoDataFrame({
+            "orientation_angle": orientation_angles,
+            "eccentricity": eccentricities,
+            "longitude": longitudes,
+            "latitude": latitudes,
+            "geometry": polygons
+        })
+
+        if utm_crs is not None:
+            gdf.set_crs(utm_crs, inplace=True)
+        else:
+            gdf.set_crs(epsg=32721, inplace=True)
+
+        if reproject_to_latlon:
+            gdf = gdf.to_crs(epsg=4326)
+
+        return gdf
