@@ -1,3 +1,11 @@
+"""
+tools.py
+
+Geospatial utility functions for building subset extraction, grid creation,
+overlap analysis, and orientation visualization in metric coordinates.
+
+"""
+
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
@@ -13,9 +21,19 @@ from shapely.geometry import Point
 
 from settings import CONSTANTS
 
-def create_subset(log_center, lat_center, size_meters, label, size_entries_limit = 1e5):
+def create_subset(log_center, lat_center, size_meters, label, size_entries_limit=1e5):
     """
-    This method creates a subset of entries centered around a given point.
+    Create a subset of entries centered around a given point and save as CSV.
+
+    Args:
+        log_center (float): Longitude of the center point.
+        lat_center (float): Latitude of the center point.
+        size_meters (float): Size of the square region (meters).
+        label (str): Label for the subset file.
+        size_entries_limit (int, optional): Max number of entries to allow.
+
+    Returns:
+        pd.DataFrame: Subset of the data within the specified region.
     """
 
     # We check that the file exists
@@ -31,7 +49,7 @@ def create_subset(log_center, lat_center, size_meters, label, size_entries_limit
     assert lat_center > lat_min and lat_center < lat_max, "Latitude center is out of bounds"
 
     # Convert size from meters to degrees
-    size_degrees = size_meters * CONSTANTS.METERS_TO_DEGREES
+    size_degrees = size_meters * 1 / 111320 # Approximate conversion factor for meters to degrees
     # Calculate the bounds of the subset
     lat_min_boundary = lat_center - size_degrees / 2
     lat_max_boundary = lat_center + size_degrees / 2
@@ -57,7 +75,13 @@ def create_subset(log_center, lat_center, size_meters, label, size_entries_limit
 
 def load_subset(label):
     """
-    This method loads a subset of entries from a csv file.
+    Load a subset of entries from a CSV file by label.
+
+    Args:
+        label (str): Subset label (filename without .csv).
+
+    Returns:
+        pd.DataFrame: Loaded subset.
     """
     if not label in available_subsets():
         raise ValueError(f"Subset {label} not found. Available subsets: {available_subsets()}")
@@ -69,7 +93,10 @@ def load_subset(label):
 
 def available_subsets():
     """
-    This method returns a list of available subsets.
+    List all available subset CSV files in the subsets folder.
+
+    Returns:
+        list[str]: List of subset labels (filenames without .csv).
     """
 
     import os
@@ -81,7 +108,14 @@ def available_subsets():
 
 def convert_to_gpd(data):
     """
-    This method preprocesses the data converting dtypes and creating the geopandas dataframe.
+    Convert a DataFrame to a GeoDataFrame with WKT geometry and EPSG:4326.
+
+    This function assumes that the DataFrame has a 'geometry' column with WKT strings. Also assumes that the DataFrame has 'latitude', 'longitude', 'confidence', 'area_in_meters', and 'full_plus_code' columns.
+    Args:
+        data (pd.DataFrame): DataFrame with a 'geometry' column as WKT strings.
+
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame with geometry column and EPSG:4326 CRS.
     """
 
     # Convert the data to a GeoDataFrame
@@ -103,13 +137,29 @@ def convert_to_gpd(data):
 
 def get_region_centroid(gpf):
     """
-    This method returns the centroid of the region.
+    Get the centroid (x, y) of the region from a GeoDataFrame.
+
+    Args:
+        gpf (gpd.GeoDataFrame): GeoDataFrame with geometry column.
+
+    Returns:
+        tuple[float, float]: (x, y) coordinates of the centroid.
     """
     # Get the centroid of the region
     centroid = gpf.unary_union.centroid
     return centroid.x, centroid.y
 
 def convert_to_UTM(gdf):
+    """
+    Convert a GeoDataFrame from EPSG:4326 to the appropriate UTM zone (meters).
+    Adds 'coord_x' and 'coord_y' columns for projected coordinates.
+
+    Args:
+        gdf (gpd.GeoDataFrame): Input GeoDataFrame in EPSG:4326.
+
+    Returns:
+        gpd.GeoDataFrame: Projected GeoDataFrame with metric coordinates.
+    """
     long, lat = get_region_centroid(gdf)
     zone = int((long + 180) / 6) + 1
     is_northern = lat >= 0
@@ -124,6 +174,15 @@ def convert_to_UTM(gdf):
     return gdf_utm
 
 def calculate_polygon_size(polygon):
+    """
+    Calculate the maximum half-size (radius) of a polygon's bounding box.
+
+    Args:
+        polygon (shapely.geometry.Polygon): Polygon geometry.
+
+    Returns:
+        float: Half the maximum side length of the bounding box.
+    """
     min_x, min_y, max_x, max_y = polygon.bounds
     width = (max_x - min_x)
     height = (max_y - min_y)
@@ -131,6 +190,15 @@ def calculate_polygon_size(polygon):
 
 
 def add_derivate_columns(data):
+    """
+    Add relative coordinates and cell indices to the DataFrame in metric space.
+
+    Args:
+        data (gpd.GeoDataFrame): DataFrame with 'coord_x' and 'coord_y' columns.
+
+    Returns:
+        gpd.GeoDataFrame: DataFrame with added relative and cell columns.
+    """
     # We will create a naive long and lat coordinates relative to the center of the area that we want to analyze, this allows us to make easy the math to locate the corresponding cell with just a simple division.
     area_center_x, area_center_y = get_region_centroid(data)
     
@@ -148,6 +216,18 @@ def add_derivate_columns(data):
     return data
 
 def create_polygon(x, y, area_center_x, area_center_y):
+    """
+    Create a square polygon for a grid cell in metric coordinates.
+
+    Args:
+        x (int): Cell x index.
+        y (int): Cell y index.
+        area_center_x (float): X coordinate of region center.
+        area_center_y (float): Y coordinate of region center.
+
+    Returns:
+        shapely.geometry.Polygon: Polygon for the cell.
+    """
     # Create a polygon for each cell
     coords = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]
     coords = [(coord[0] * CONSTANTS.CELL_SIZE_METERS + area_center_x, coord[1] * CONSTANTS.CELL_SIZE_METERS + area_center_y) for coord in coords]
@@ -155,6 +235,15 @@ def create_polygon(x, y, area_center_x, area_center_y):
     return poly
 
 def create_grid(data):
+    """
+    Create a grid of polygons covering the region, indexed by cell indices.
+
+    Args:
+        data (gpd.GeoDataFrame): DataFrame with 'x_cell', 'y_cell' columns.
+
+    Returns:
+        dict: Nested dict of polygons grid_polygons[x][y] = Polygon.
+    """
     x_min = data["x_cell"].min()
     x_max = data["x_cell"].max()
     y_min = data["y_cell"].min()
@@ -175,10 +264,30 @@ def create_grid(data):
     return grid_polygons
 
 def add_overlapping_cells(data, grid_polygons):
+    """
+    Add a column to the DataFrame with overlapping grid cells for each building.
+
+    Args:
+        data (gpd.GeoDataFrame): DataFrame with building geometries.
+        grid_polygons (dict): Grid polygons as returned by create_grid.
+
+    Returns:
+        gpd.GeoDataFrame: DataFrame with 'overlapping' column.
+    """
     data["overlapping"] = data.progress_apply(lambda row: found_overlapping_cells(row, grid_polygons), axis=1)
     return data
 
 def found_overlapping_cells(row, grid_polygons):
+    """
+    Find all grid cells that overlap with a building polygon.
+
+    Args:
+        row (pd.Series): Row with building geometry and cell indices.
+        grid_polygons (dict): Grid polygons as returned by create_grid.
+
+    Returns:
+        list[dict]: List of overlapping cell info dicts.
+    """
     # Get the cell coordinates
     x_cell = row["x_cell"]
     y_cell = row["y_cell"]
@@ -210,7 +319,15 @@ def found_overlapping_cells(row, grid_polygons):
     return overlapping
 
 def build_intersections_df(data):
+    """
+    Build a DataFrame of all building-cell intersections from the 'overlapping' column.
 
+    Args:
+        data (gpd.GeoDataFrame): DataFrame with 'overlapping' column.
+
+    Returns:
+        pd.DataFrame: DataFrame of intersections with area and fractions.
+    """
     intersections = data["overlapping"].explode().reset_index(drop=True)
     intersections = pd.DataFrame(intersections.tolist())
     intersections["fraction_of_buildings_in_cell"] = intersections["area"] / intersections.groupby(["x_cell", "y_cell"])["area"].transform("sum")
@@ -218,6 +335,15 @@ def build_intersections_df(data):
     return intersections
 
 def build_cell_composition(intersections):
+    """
+    Build a DataFrame describing the composition of each cell (which buildings, fractions, area).
+
+    Args:
+        intersections (pd.DataFrame): DataFrame of building-cell intersections.
+
+    Returns:
+        pd.DataFrame: DataFrame with cell composition as lists of dicts.
+    """
     # We will create a dataframe with the cell composition
     cell_composition = intersections.groupby(["x_cell", "y_cell"])[["polygon_tag", "fraction_of_buildings_in_cell", "fraction_of_the_building", "area"]].apply(
         lambda x: [{"polygon_tag": row["polygon_tag"], "fraction_of_buildings_in_cell": row["fraction_of_buildings_in_cell"], "fraction_of_the_building": row["fraction_of_the_building"], "area": row["area"]} for _, row in x.iterrows()]
@@ -226,7 +352,16 @@ def build_cell_composition(intersections):
     cell_composition.columns = ["cell_composition"]
     return cell_composition
 
-def plot_occupied_area_heatmap(intersections, area_center_x, area_center_y, save_as = None):
+def plot_occupied_area_heatmap(intersections, area_center_x, area_center_y, save_as=None):
+    """
+    Plot a heatmap of the fraction of each cell's area that is occupied by buildings.
+
+    Args:
+        intersections (pd.DataFrame): DataFrame of building-cell intersections.
+        area_center_x (float): X coordinate of region center (meters).
+        area_center_y (float): Y coordinate of region center (meters).
+        save_as (str, optional): If provided, saves the plot to this file path.
+    """
     occupied_area = intersections.groupby(["x_cell", "y_cell"])["area"].sum().reset_index()
     occupied_area["cell_occupancy_fraction"] = occupied_area["area"] / (CONSTANTS.CELL_SIZE_METERS) ** 2
     occupied_area_heatmap = occupied_area.pivot_table(index="y_cell", columns="x_cell", values="cell_occupancy_fraction", aggfunc="sum", fill_value=0)
@@ -256,6 +391,16 @@ def plot_occupied_area_heatmap(intersections, area_center_x, area_center_y, save
     plt.show()
 
 def get_polygon_orientation(polygon, include_eccentricity=True):
+    """
+    Calculate the orientation angle and eccentricity of a polygon using PCA of its minimum rotated rectangle.
+
+    Args:
+        polygon (shapely.geometry.Polygon): Polygon geometry.
+        include_eccentricity (bool): Whether to return eccentricity as well as angle.
+
+    Returns:
+        float or tuple: Angle in degrees (0-180), and optionally eccentricity (0-1).
+    """
     mrr = polygon.minimum_rotated_rectangle # With this we ensure the independence of the number of points density of the polygon
     coords = np.array(mrr.exterior.coords[:])
     if (coords[0] == coords[-1]).all():
@@ -274,6 +419,15 @@ def get_polygon_orientation(polygon, include_eccentricity=True):
         return angle_deg % 180
     
 def add_building_orientation(gdf):
+    """
+    Add orientation and eccentricity columns to each building in the GeoDataFrame.
+
+    Args:
+        gdf (gpd.GeoDataFrame): DataFrame with building geometries.
+
+    Returns:
+        gpd.GeoDataFrame: DataFrame with 'orientation_angle' and 'eccentricity' columns.
+    """
     # Calculate the orientation for each polygon
     gdf["orientation"] = gdf.progress_apply(lambda row: get_polygon_orientation(row["geometry"]), axis=1)
     # Split the orientation into two columns
@@ -282,7 +436,18 @@ def add_building_orientation(gdf):
     gdf.drop(columns=["orientation"], inplace=True)
     return gdf
     
-def get_orientation_for_many_polygons(polygons, weights = None, include_eccentricity=True):
+def get_orientation_for_many_polygons(polygons, weights=None, include_eccentricity=True):
+    """
+    Calculate the weighted orientation and eccentricity for a list of polygons.
+
+    Args:
+        polygons (list[shapely.geometry.Polygon]): List of polygons.
+        weights (list[float], optional): Weights for each polygon.
+        include_eccentricity (bool): Whether to return eccentricity as well as angle.
+
+    Returns:
+        float or tuple: Angle in degrees (0-180), and optionally eccentricity (0-1).
+    """
     if weights is None:
         weights = np.ones(len(polygons))
     assert len(polygons) == len(weights), "The number of polygons and weights must be the same"
@@ -309,6 +474,16 @@ def get_orientation_for_many_polygons(polygons, weights = None, include_eccentri
         return angle_deg % 180
 
 def calculate_orientation_for_cell(cell_composition_row, buildings_df):
+    """
+    Calculate the dominant orientation and eccentricity for a cell based on the buildings it contains.
+
+    Args:
+        cell_composition_row (pd.Series): Row from the cell composition DataFrame containing 'cell_composition'.
+        buildings_df (gpd.GeoDataFrame): DataFrame with building geometries and 'full_plus_code'.
+
+    Returns:
+        tuple: (orientation_angle, eccentricity) for the cell.
+    """
     # Get the cell composition
     cell_composition = cell_composition_row["cell_composition"]
     # Get the buildings in the cell
@@ -325,6 +500,16 @@ def calculate_orientation_for_cell(cell_composition_row, buildings_df):
     return orientations
 
 def add_orientation_to_cells(composition, buildings_df):
+    """
+    Add orientation and eccentricity columns to each cell in the cell composition DataFrame.
+
+    Args:
+        composition (pd.DataFrame): DataFrame with cell compositions.
+        buildings_df (gpd.GeoDataFrame): DataFrame with building geometries and 'full_plus_code'.
+
+    Returns:
+        pd.DataFrame: DataFrame with added 'orientation_angle' and 'eccentricity' columns.
+    """
     # Calculate the orientation for each cell
     composition["orientation"] = composition.progress_apply(lambda row: calculate_orientation_for_cell(row, buildings_df), axis=1)
     # Split the orientation into two columns
@@ -335,8 +520,14 @@ def add_orientation_to_cells(composition, buildings_df):
 
 def plot_orientation_lines(cell_composition, area_center_x=0, area_center_y=0, save_as=None):
     """
-    Dibuja una línea centrada en cada celda, con orientación determinada por el ángulo
-    y longitud proporcional a la excentricidad. Robusto a la escala.
+    Plot a line centered in each cell, with direction given by the orientation angle and length proportional to eccentricity.
+    All coordinates and lengths are in meters (metric system).
+
+    Args:
+        cell_composition (pd.DataFrame): DataFrame with cell orientation and eccentricity.
+        area_center_x (float): X coordinate (meters) of the region center.
+        area_center_y (float): Y coordinate (meters) of the region center.
+        save_as (str, optional): If provided, saves the plot to this file path.
     """
     df = cell_composition.reset_index().copy()
 
