@@ -8,12 +8,14 @@ The files 1-Exploration.ipynb and 2-Processing.ipynb are used to explore the dat
 
 The file 3-DataPreparation.ipynb is a small file used to prepare small datasets from the big source file that has a huge region and is very heavy to be shared on the project.
 
-On 4-Example.ipynb there is a detailed explanations of the logic under the pipeline of the project.
+On Project Description there is a detailed explanations of the logic under the pipeline of the project.
 
-The pipeline.ipynb file is a notebook that contains the main steps of the project with a minor presentation of internal steps. This file is used to check that everything is working ok on the development process.
+The pipeline.ipynb file is a notebook that contains the main steps of the project with a minor presentation of internal steps. This file is used to check that everything is working ok on the development process and produce the required outputs.
 
 settings.py has the common settings and hardcoded values used on the project.
 
 tools.py is the main file with the functions used to process the data.
 
-On 4-Example.ipynb there is a more detailed explanations of the logic under the pipeline of the project.
+on requirements.txt there are the libraries used on the project.
+
+The output folder contains the outputs of the project.

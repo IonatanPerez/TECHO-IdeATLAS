@@ -52,13 +52,8 @@ So, with the list of buildings that belong to the cell we make the following ste
 
 ## Outputs
 
-Once we have calculated the orientation and the covered area of each cell we have all the required information to represent the required information. We decided to create a heatmap to represent the covered area and a representation of lines to represent the orientation of the buildings on the cells.
+On pipeline we build partial visualizations of the data but also under Outputs folder we store the three required outputs with geojson format.
 
 ## Libraries and tools utilized
 
 For general data processing we used mostly Pandas and Geopandas (for transforming the raw data into polygons and make switch of spatial representations). We used Shapely to manage the Polygons objects and check the overlapping areas. We use seaborn to represent the heatmap and matplotlib to represent the orientation of the buildings.
-
-## Pending things
-
-- We could make a more efficient algorithm that create the cells polygons if we create them on demand. this is because for big low populated areas most of the cells are empty so there is no sense create them all.
-- 
