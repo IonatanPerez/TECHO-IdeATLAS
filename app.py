@@ -1,44 +1,37 @@
 import streamlit as st
-import geopandas as gpd
-import pandas as pd
 import matplotlib.pyplot as plt
+from tools import available_subsets, load_subset, convert_to_gpd
 
-from tools import (
-    available_subsets,
-    load_subset,
-    convert_to_gpd,
-    convert_to_metric,
-    get_area_center,
-)
-from settings import CONSTANTS
+st.set_page_config(page_title="Building Subset Viewer", layout="wide")
+st.title("🏗️ Explorador de Subsets de Edificios")
 
-st.set_page_config(page_title="Building Orientation Explorer", layout="wide")
+# Panel lateral
+st.sidebar.header("Opciones")
+subsets = available_subsets()
 
-st.title("🏗️ Building Subset Viewer")
+if not subsets:
+    st.error("⚠️ No se encontraron subsets en la carpeta definida.")
+    st.stop()
 
-# Sidebar
-st.sidebar.header("Options")
-subset_options = available_subsets()
-selected_subset = st.sidebar.selectbox("Select a subset", subset_options)
+selected_subset = st.sidebar.selectbox("Seleccioná un subset", subsets)
 
 if selected_subset:
-    st.sidebar.success(f"Selected: {selected_subset}")
-    
-    # Load data
-    raw_df = load_subset(selected_subset)
-    gdf = convert_to_gpd(raw_df)
-    gdf_metric = convert_to_metric(gdf)
+    st.sidebar.success(f"Subset seleccionado: `{selected_subset}`")
 
-    # Display metrics
-    st.subheader("📊 Dataset Info")
-    st.markdown(f"- **Buildings**: {len(gdf)}")
-    st.markdown(f"- **CRS**: {gdf.crs.to_string()}")
-    st.markdown(f"- **Area Center**: {get_area_center(gdf)}")
+    # Cargar datos
+    df = load_subset(selected_subset)
+    gdf = convert_to_gpd(df)
 
-    # Show map
-    st.subheader("🗺️ Buildings Map")
+    # Mostrar métricas básicas
+    st.subheader("📊 Información del Dataset")
+    st.markdown(f"- Edificios: **{len(gdf)}**")
+    st.markdown(f"- Sistema de referencia (CRS): **{gdf.crs.to_string()}**")
+
+    # Mapa de edificios
+    st.subheader("🗺️ Mapa de Edificios")
     fig, ax = plt.subplots(figsize=(10, 10))
-    gdf.plot(ax=ax, color="lightblue", edgecolor="black", alpha=0.5)
-    plt.xlabel("Longitude")
-    plt.ylabel("Latitude")
+    gdf.plot(ax=ax, color="lightblue", edgecolor="black", alpha=0.6)
+    ax.set_title(f"Subset: {selected_subset}")
+    ax.set_xlabel("Longitud")
+    ax.set_ylabel("Latitud")
     st.pyplot(fig)
